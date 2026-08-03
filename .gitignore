@@ -1,0 +1,15 @@
+# Top-level gitignore. Anything not under web/ uses these defaults.
+# web/ has its own .gitignore that filters node_modules, .next, .env.local.
+
+.DS_Store
+*.log
+.vercel
+coverage
+
+# Never commit secrets. Hook these into a pre-commit / pre-push hook before going live.
+.env
+.env.local
+.env.*.local
+!.env.example
+!web/.env.example
+!web/env.vercel.example

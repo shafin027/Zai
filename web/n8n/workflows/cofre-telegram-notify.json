@@ -1,0 +1,119 @@
+// Notify-Voice workflow — runs again whenever /api/notify calls n8n.
+// Sends the counterparty a Bangla-or-English voice note saying there's a
+// new entry involving them. Same HMAC + error pattern as the main workflow.
+{
+  "name": "cofre-telegram-notify",
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "cofre" }, { "name": "notify" }],
+  "nodes": [
+    {
+      "id": "wh",
+      "name": "Telegram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cofre-notify",
+        "responseMode": "responseNode",
+        "rawBody": true
+      },
+      "position": [180, 360]
+    },
+    {
+      "id": "verify",
+      "name": "Verify HMAC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const crypto=require('crypto');const sec=process.env.N8N_SHARED_SECRET;const sig=$input.item.json.headers['x-cofre-signature']||'';const body=JSON.stringify($input.item.json.body);const exp=crypto.createHmac('sha256',sec).update(body).digest('hex');if(sig.length!==exp.length||!crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(exp)))throw new Error('bad-sig');return[{json:$input.item.json.body}];"
+      },
+      "position": [380, 360],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "typing",
+      "name": "Show Typing",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "parameters": {
+        "chatId": "={{ $json.recipient.telegram_id }}",
+        "action": "record_voice"
+      },
+      "position": [580, 360]
+    },
+    {
+      "id": "compose",
+      "name": "Compose Notification Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const r=$json.recipient,o=$json.origin,k=$json.kind;\nconst loc=r.locale||'en';\nconst text = loc==='bn'\n  ? (k==='lend' ? `${o.first_name} তোমাকে টাকা ধার দিয়েছে। লেজারে যোগ হয়েছে।` : k==='borrow' ? `তুমি ${o.first_name} থেকে ধার নিয়েছ। লেজারে যোগ হয়েছে।` : `তুমি ${o.first_name} কে শোধ করেছ।`)\n  : (k==='lend' ? `${o.first_name} just lent you money. Logged in the ledger.` : k==='borrow' ? `You just borrowed from ${o.first_name}. Logged in the ledger.` : `You just settled with ${o.first_name}.`);\nreturn [{json:{chatId:r.telegram_id,text,lang:loc}}];"
+      },
+      "position": [780, 360]
+    },
+    {
+      "id": "tts",
+      "name": "Synthesize Voice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://texttospeech.googleapis.com/v1/text:synthesize?key={{$env.GOOGLE_TTS_API_KEY}}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "input", "value": "={{ JSON.stringify({ ssml: `<speak>${$json.text.replace(/[<&>]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;'}[c]))}</speak>` }) }}" },
+            { "name": "voice", "value": "={{ JSON.stringify($json.lang === 'bn' ? { languageCode: 'bn-IN', name: 'bn-IN-Standard-A' } : { languageCode: 'en-IN', name: 'en-IN-Neural2-A' }) }}" },
+            { "name": "audioConfig", "value": '={{ JSON.stringify({ audioEncoding: "MP3" }) }}' }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "json" } } },
+        "alwaysOutputData": true
+      },
+      "position": [980, 360],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "id": "send",
+      "name": "Send Voice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "binaryData": true,
+        "binaryPropertyName": "voice"
+      },
+      "position": [1180, 360]
+    },
+    {
+      "id": "respond",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "parameters": { "respondWith": "json", "responseBody": '={{JSON.stringify({ok:true})}}', "options": { "responseCode": 200 } },
+      "position": [1380, 360]
+    },
+    {
+      "id": "err",
+      "name": "Error Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "parameters": { "respondWith": "json", "responseBody": '={{JSON.stringify({ok:false})}}', "options": { "responseCode": 500 } },
+      "position": [1380, 540]
+    }
+  ],
+  "connections": {
+    "Telegram Webhook": { "main": [[{ "node": "Verify HMAC", "type": "main", "index": 0 }]] },
+    "Verify HMAC": { "main": [[{ "node": "Show Typing", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Respond", "type": "main", "index": 0 }]] },
+    "Show Typing": { "main": [[{ "node": "Compose Notification Text", "type": "main", "index": 0 }]] },
+    "Compose Notification Text": { "main": [[{ "node": "Synthesize Voice", "type": "main", "index": 0 }]] },
+    "Synthesize Voice": { "main": [[{ "node": "Send Voice", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Respond", "type": "main", "index": 0 }]] },
+    "Send Voice": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  }
+}

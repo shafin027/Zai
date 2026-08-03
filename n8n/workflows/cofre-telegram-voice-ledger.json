@@ -1,0 +1,321 @@
+{
+  "name": "cofre-telegram-voice-ledger",
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "tags": [{ "name": "cofre" }, { "name": "telegram" }, { "name": "voice" }],
+  "nodes": [
+    {
+      "id": "wf-webhook-telegram",
+      "name": "Telegram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cofre-telegram",
+        "responseMode": "responseNode",
+        "responseData": "allEntriesToBinaryData",
+        "options": { "rawBody": true }
+      },
+      "position": [180, 360],
+      "webhookId": "REPLACE-WITH-N8N-WEBHOOK-ID"
+    },
+    {
+      "id": "wf-verify-hmac",
+      "name": "Verify HMAC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Inline HMAC verification — webhook never forwards on bad signature.\nconst crypto = require('crypto');\nconst secret = process.env.N8N_SHARED_SECRET;\nif (!secret) throw new Error('missing N8N_SHARED_SECRET');\nconst sig = $input.item.json.headers['x-cofre-signature'] || '';\nconst body = JSON.stringify($input.item.json.body);\nconst expected = crypto.createHmac('sha256', secret).update(body).digest('hex');\nconst ok = sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));\nif (!ok) throw new Error('bad-signature');\nreturn [{ json: $input.item.json.body }];"
+      },
+      "position": [380, 360],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "wf-typing-start",
+      "name": "Show Typing",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "action": "record_voice"
+      },
+      "position": [580, 360],
+      "credentials": { "telegramApi": { "id": "REPLACE", "name": "Telegram bot" } }
+    },
+    {
+      "id": "wf-route-kind",
+      "name": "Route by Kind",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.1,
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+                "conditions": [
+                  { "leftValue": "={{ $json.message.voice.file_id }}", "rightValue": "", "operator": { "type": "exists", "singleValue": true } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "voice"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+                "conditions": [
+                  { "leftValue": "={{ $json.message.text }}", "rightValue": "", "operator": { "type": "exists", "singleValue": true } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "text"
+            }
+          ]
+        },
+        "options": { "renameFallbackOutput": true }
+      },
+      "position": [780, 360]
+    },
+    {
+      "id": "wf-dl-voice",
+      "name": "Download Voice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": "={{ $json.message.voice.file_id }}"
+      },
+      "position": [980, 280],
+      "credentials": { "telegramApi": { "id": "REPLACE", "name": "Telegram bot" } },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "wf-stt",
+      "name": "Groq Whisper STT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{$env.GROQ_API_KEY}}" }
+          ]
+        },
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": { "timeout": 30000 }
+      },
+      "position": [1180, 280],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "wf-combine",
+      "name": "Combine Inputs",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [1380, 360]
+    },
+    {
+      "id": "wf-profile-ctx",
+      "name": "Load Sender Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const fetch = (...a) => globalThis.fetch(...a);\nconst tg = $json.message.from;\nconst text = $('Combine Inputs').item.json.text;\nconst KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;\nconst SUPA = process.env.SUPABASE_URL;\nconst r = await fetch(SUPA + '/rest/v1/profiles?select=id,first_name,locale,default_currency&telegram_id=eq.' + tg.id, {\n  headers: { apikey: KEY, Authorization: 'Bearer ' + KEY }\n});\nconst ownerArr = await r.json();\nconst owner = ownerArr[0];\nconst fr = await fetch(SUPA + '/rest/v1/relations?select=friend:friend_id(first_name,last_name,telegram_username)&owner_id=eq.' + owner.id, {\n  headers: { apikey: KEY, Authorization: 'Bearer ' + KEY }\n});\nconst friends = (await fr.json() || []).map(x => x.friend);\nconst tr = await fetch(SUPA + '/rest/v1/tours?select=name,nickname&owner_id=eq.' + owner.id + '&status=eq.active', {\n  headers: { apikey: KEY, Authorization: 'Bearer ' + KEY }\n});\nconst tours = await tr.json() || [];\nreturn [{ json: { transcript: text, user: owner, knownFriends: friends, activeTours: tours } }];"
+      },
+      "position": [1580, 360]
+    },
+    {
+      "id": "wf-claude",
+      "name": "Extract Intent (Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$env.ANTHROPIC_API_KEY}}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "claude-sonnet-5" },
+            { "name": "max_tokens", "value": "600" },
+            { "name": "temperature", "value": "0" },
+            {
+              "name": "system",
+              "value": "=You are Cofre's intent extractor. Treat transcript as Bangla, English, or mixed. Resolve counterparty names only against the provided knownFriends list (case/spacing insensitive). Currency defaults BDT. Return a single JSON object with shape: { actions: [{ kind: 'expense'|'lend'|'borrow'|'settle'|'unknown', amount_cents?:number, currency?:string, counterparty_name?:string, memo:string, confidence:number, followup_question?:string }], language: 'en'|'bn' }. No prose. No markdown."
+            },
+            {
+              "name": "messages",
+              "value": "[{\"role\":\"user\",\"content\":\"TRANSCRIPT:\\n\" + $('Load Sender Context').item.json.transcript + \"\\n\\nKNOWN FRIENDS:\\n\" + JSON.stringify($('Load Sender Context').item.json.knownFriends)}]"
+            }
+          ]
+        },
+        "options": { "timeout": 30000, "response": { "response": { "responseFormat": "json" } } }
+      },
+      "position": [1780, 360],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "wf-parse",
+      "name": "Parse Intent JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $json.content?.[0]?.text || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch { parsed = { actions: [{ kind: 'unknown', memo: '', confidence: 0 }], language: $('Load Sender Context').item.json.user.locale || 'en' }; }\nreturn [{ json: parsed, _ctx: $('Load Sender Context').item.json }];"
+      },
+      "position": [1980, 360]
+    },
+    {
+      "id": "wf-write",
+      "name": "Write Entries (Supabase)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const fetch = (...a) => globalThis.fetch(...a);\nconst SUPA = process.env.SUPABASE_URL, KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;\nconst ctx = $json._ctx, intent = $json;\nconst ownerId = ctx.user.id;\nconst friendByName = new Map();\nfor (const f of ctx.knownFriends) {\n  const key = [f.first_name, f.last_name].filter(Boolean).join(' ').toLowerCase();\n  friendByName.set(key, f.id);\n  friendByName.set((f.telegram_username || '').toLowerCase(), f.id);\n}\nconst tourByNick = new Map();\nconst tourMembersCache = {};\nfor (const t of (ctx.activeTours || [])) {\n  if (t.nickname) tourByNick.set(String(t.nickname).toLowerCase(), t);\n}\nconst rows = [];\nfor (const a of (intent.actions || [])) {\n  if (a.kind === 'unknown' || !a.amount_cents) continue;\n  const cpName = (a.counterparty_name || '').toLowerCase();\n  const cpId = friendByName.get(cpName) || null;\n  let tourId = null, tourMemberId = null;\n  if (a.tour_nickname) {\n    const t = tourByNick.get(String(a.tour_nickname).toLowerCase());\n    if (t) {\n      tourId = t.id;\n      if (!tourMembersCache[tourId]) {\n        const mr = await fetch(SUPA + '/rest/v1/tour_members?select=id,profile_id&tour_id=eq.' + tourId, {\n          headers: { apikey: KEY, Authorization: 'Bearer ' + KEY }\n        });\n        tourMembersCache[tourId] = (await mr.json() || []);\n      }\n      const assignName = (a.assign_to_member_name || '').toLowerCase();\n      if (assignName) {\n        const assignId = friendByName.get(assignName);\n        const member = assignId ? tourMembersCache[tourId].find(m => m.profile_id === assignId) : null;\n        tourMemberId = member ? member.id : null;\n      }\n    }\n  }\n  rows.push({\n    owner_id: ownerId,\n    counterparty_id: cpId,\n    tour_id: tourId,\n    tour_member_id: tourMemberId,\n    kind: a.kind,\n    amount_cents: a.amount_cents,\n    currency: a.currency || ctx.user.default_currency || 'BDT',\n    occurred_at: new Date().toISOString(),\n    memo: a.memo || '',\n    source: 'telegram_voice',\n    source_message_id: String($('Combine Inputs').item.json.message_id || ''),\n    raw_transcript: $('Combine Inputs').item.json.text || '',\n    confirmed_by_owner: a.confidence >= 0.7\n  });\n}\nif (rows.length) {\n  await fetch(SUPA + '/rest/v1/entries', {\n    method: 'POST',\n    headers: { apikey: KEY, Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json' },\n    body: JSON.stringify(rows)\n  });\n}\nreturn [{ json: { written: rows, intent, ctx } }];"
+      },
+      "position": [2180, 360],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "wf-tts-text",
+      "name": "Pick Confirmation Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fmt(n,c){const m=(n/100).toLocaleString('en-US',{maximumFractionDigits:2});return ['BDT','USD','EUR'].includes(c)?`${c} ${m}`:`${m} ${c}`;}\nconst intent = $json.intent;\nconst lang = intent.language;\nconst a = (intent.actions || [])[0] || { kind: 'unknown' };\nlet text;\nif (lang === 'bn') {\n  text = a.kind === 'lend' ? `${a.counterparty_name||'ওনাকে'} ${fmt(a.amount_cents,a.currency)} ধার দিয়েছ। মনে রাখলাম।`\n       : a.kind === 'borrow' ? `${a.counterparty_name||'ওনার থেকে'} ${fmt(a.amount_cents,a.currency)} ধার নিয়েছ। পরে জানাবে।`\n       : a.kind === 'settle' ? `${fmt(a.amount_cents,a.currency)} শোধ করলে।`\n       : a.kind === 'expense' ? `${fmt(a.amount_cents,a.currency)} খরচ। মনে রাখলাম।`\n       : 'আরেকটু পরিষ্কার বলবেন?';\n} else {\n  text = a.kind === 'lend' ? `Logged. Lent ${fmt(a.amount_cents,a.currency)} to ${a.counterparty_name||'them'}.`\n       : a.kind === 'borrow' ? `Logged. Borrowed ${fmt(a.amount_cents,a.currency)} from ${a.counterparty_name||'them'}.`\n       : a.kind === 'settle' ? `Logged. Settled ${fmt(a.amount_cents,a.currency)}.`\n       : a.kind === 'expense' ? `Logged. ${fmt(a.amount_cents,a.currency)} spent.`\n       : 'Could you say that again, please?';\n}\nreturn [{ json: { chatId: $json.ctx && $json.ctx.user ? $('Combine Inputs').item.json.message.chat.id : 0, text, lang } }];"
+      },
+      "position": [2380, 360]
+    }
+    {
+      "id": "wf-tts-call",
+      "name": "Synthesize Voice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://texttospeech.googleapis.com/v1/text:synthesize?key={{$env.GOOGLE_TTS_API_KEY}}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "input",
+              "value": "={{ JSON.stringify({ ssml: `<speak>${$json.text.replace(/[<&>]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;'}[c]))}</speak>` }) }}"
+            },
+            {
+              "name": "voice",
+              "value": "={{ JSON.stringify($json.lang === 'bn' ? { languageCode: 'bn-IN', name: 'bn-IN-Standard-A' } : { languageCode: 'en-IN', name: 'en-IN-Neural2-A' }) }}"
+            },
+            { "name": "audioConfig", "value": '={{ JSON.stringify({ audioEncoding: "MP3", speakingRate: 1.0, pitch: 0 }) }}' }
+          ]
+        },
+        "options": { "timeout": 15000, "response": { "response": { "responseFormat": "json" } } },
+        "alwaysOutputData": true
+      },
+      "position": [2580, 360],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "id": "wf-send-voice",
+      "name": "Send Reply Voice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "parameters": {
+        "resource": "message",
+        "operation": "sendVoice",
+        "chatId": "={{ $('Pick Confirmation Text').item.json.chatId }}",
+        "binaryData": true,
+        "binaryPropertyName": "voice",
+        "additionalFields": { "caption": "={{ $('Pick Confirmation Text').item.json.text }}" }
+      },
+      "position": [2780, 360],
+      "credentials": { "telegramApi": { "id": "REPLACE", "name": "Telegram bot" } }
+    },
+    {
+      "id": "wf-respond",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "position": [2980, 360]
+    },
+    {
+      "id": "wf-err-handle",
+      "name": "Error Branch Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.message || 'unknown' }) }}",
+        "options": { "responseCode": 500 }
+      },
+      "position": [2980, 540]
+    },
+    {
+      "id": "wf-err-notify",
+      "name": "Error Notify Owner",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "parameters": {
+        "chatId": "={{ $('Combine Inputs').item.json.message ? $('Combine Inputs').item.json.message.chat.id : 0 }}",
+        "text": "Hmm, something broke on my end. Try again in a moment.",
+        "additionalFields": { "parse_mode": "HTML" }
+      },
+      "position": [2780, 540],
+      "credentials": { "telegramApi": { "id": "REPLACE", "name": "Telegram bot" } }
+    }
+  ],
+  "connections": {
+    "Telegram Webhook": { "main": [[{ "node": "Verify HMAC", "type": "main", "index": 0 }]] },
+    "Verify HMAC": { "main": [[{ "node": "Show Typing", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Branch Respond", "type": "main", "index": 0 }]] },
+    "Show Typing": { "main": [[{ "node": "Route by Kind", "type": "main", "index": 0 }]] },
+    "Route by Kind": { "main": [[{ "node": "Download Voice", "type": "main", "index": 0 }], [{ "node": "Combine Inputs", "type": "main", "index": 0 }]] },
+    "Download Voice": { "main": [[{ "node": "Groq Whisper STT", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Notify Owner", "type": "main", "index": 0 }]] },
+    "Groq Whisper STT": { "main": [[{ "node": "Combine Inputs", "type": "main", "index": 1 }]], "error": [[{ "node": "Error Notify Owner", "type": "main", "index": 0 }]] },
+    "Combine Inputs": { "main": [[{ "node": "Load Sender Context", "type": "main", "index": 0 }]] },
+    "Load Sender Context": { "main": [[{ "node": "Extract Intent (Claude)", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Notify Owner", "type": "main", "index": 0 }]] },
+    "Extract Intent (Claude)": { "main": [[{ "node": "Parse Intent JSON", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Notify Owner", "type": "main", "index": 0 }]] },
+    "Parse Intent JSON": { "main": [[{ "node": "Write Entries (Supabase)", "type": "main", "index": 0 }]] },
+    "Write Entries (Supabase)": { "main": [[{ "node": "Pick Confirmation Text", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Notify Owner", "type": "main", "index": 0 }]] },
+    "Pick Confirmation Text": { "main": [[{ "node": "Synthesize Voice", "type": "main", "index": 0 }]] },
+    "Synthesize Voice": { "main": [[{ "node": "Send Reply Voice", "type": "main", "index": 0 }]], "error": [[{ "node": "Error Notify Owner", "type": "main", "index": 0 }]] },
+    "Send Reply Voice": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] },
+    "Error Notify Owner": { "main": [[{ "node": "Error Branch Respond", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "versionId": "v1",
+  "id": "REPLACE-WITH-UUID-V4"
+}
