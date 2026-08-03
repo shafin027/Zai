@@ -1,0 +1,12 @@
+{
+  "$comment": "Both URL and token are read from environment. NEVER inline a literal token here — the pre-deploy-check.sh refuses commits that contain eyJ-prefixed JWTs in this file. Set N8N_MCP_URL and N8N_MCP_TOKEN in your shell (or in ~/.zshenv / ~/.bashrc); pass --stdin to `claude mcp add-json` when installing interactively so the token never hits argv or shell history.",
+  "mcpServers": {
+    "n8n-mcp": {
+      "type": "http",
+      "url": "${env:N8N_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${env:N8N_MCP_TOKEN}"
+      }
+    }
+  }
+}

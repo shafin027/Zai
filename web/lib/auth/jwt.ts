@@ -8,7 +8,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 const SECRET = () => {
   // Session JWT has its own secret. Falls back to TELEGRAM_WEBHOOK_SECRET so a
   // single value still works in dev, but production should use SESSION_SECRET.
-  const s = process.env.SESSION_SECRET ?? process.env.TELEGRAM_WEBHOOK_SECRET ?? process.env.N8N_SHARED_SECRET;
+  const s = process.env.SESSION_SECRET ?? process.env.TELEGRAM_WEBHOOK_SECRET;
   if (!s) throw new Error('SESSION_SECRET missing');
   return s;
 };

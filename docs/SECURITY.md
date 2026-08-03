@@ -40,11 +40,10 @@ rationale for not fixing it now.
 
 | Concern | Status | Where it's enforced |
 |---|---|---|
-| Telegram webhook signature | EXTERNAL | Configured via `setWebhook?secret_token=…` in your bot provider; n8n's first node verifies before any processing |
-| n8n → next webhook replay | FIXED | `lib/n8n/index.ts` requires `x-cofre-signature` HMAC over the raw body; bad signature → 401 |
-| Next → n8n outbound forgery | FIXED | `lib/n8n/notify.ts` re-signs every outbound call |
-| Webhook SSRF | MITIGATED | Both n8n webhook URLs must be a stable host; the webhook IDs are not user-influenced |
-| n8n admin UI exposure | INFRA | n8n should be on a private instance; this is the n8n-self-hosting concern, documented in the README's run-locally section |
+| Telegram webhook signature | CONFIG | Configure via `@BotFather /setwebhook` to point at `https://<your-domain>/api/telegram-webhook`. The route requires the `X-Cofre-Signature` HMAC header on every call and rejects on mismatch (401). |
+| Inbound HMAC verification | FIXED | `web/app/api/telegram-webhook/route.ts` HMAC-SHA256 over the raw body, `timingSafeEqual` compare against `TELEGRAM_WEBHOOK_SECRET` env var; 24h max age via `X-Telegram-Auth-Date` if Telegram enforces |
+| Internal notify forgery | FIXED | `lib/telegram/notify-counterparty.ts` uses `https://api.telegram.org/bot<token>/sendMessage` directly; no n8n intermediary, so no second HMAC channel to verify |
+| Outbound reply forgery | MITIGATED | Outbound messages use `TELEGRAM_BOT_TOKEN` server-side; the token is never exposed to the client. Bound by Telegram's server-side authentication. |
 
 ## Input handling
 
@@ -66,14 +65,14 @@ rationale for not fixing it now.
 | Supabase anon key in client | INFORMATIONAL | This is by design — RLS is the security boundary |
 | Database password in repo | FIXED | Not present; password rotation handled in Supabase dashboard |
 
-## Voice / AI
+## AI
 
 | Concern | Status | Where it's enforced |
 |---|---|---|
-| STT prompt injection via audio | LOW-RISK | Whisper transcribes audio only; downstream Claude receives the cleaned transcript. Casing is enforced in `lib/prompts/intent.system.md` (no-prose, no-MarkdownOutput). Confidence < 0.7 → marked unconfirmed |
-| LLM data exfiltration via transcript | LOW-RISK | We only pass transcript + a static friend list to Claude. No personal profile fields are forwarded. No system prompt instructions are forwarded. |
-| Counterparty name hallucination | MITIGATED | The intent prompt's rule #3 says counterparty resolution requires a name in `knownFriends`; confidence<0.5 names are not stored silently |
-| Cost-of-attack (TTS quota theft) | FIXED | TTS keys are server-only; quota is metered by Google; n8n error handler never replays voice twice |
+| LLM prompt injection via transcript | LOW-RISK | The intent prompt's rules forbid prose/markdown/echo; counterparty resolution is restricted to `knownFriends`; amount sanity-check is positive integer only. Confidence < 0.7 entries land with `confirmed_by_owner=false`. |
+| LLM data exfiltration via transcript | LOW-RISK | We only pass transcript + a static friend list to Claude. No personal profile fields are forwarded, no system prompt instructions are forwarded. |
+| Counterparty name hallucination | MITIGATED | The intent prompt's rule #3 says counterparty resolution requires a name in `knownFriends`. If three-condition match fails, the entry is rejected at the route (`I couldn't match a friend named "<name>"`). |
+| OpenRouter key exposure | FIXED | `OPENROUTER_API_KEY` is server-only, prefixed with `OPENROUTER_API_KEY=` (no `PUBLIC_` variant). Vercel-side env, never bundled to client. |
 
 ## Things deliberately not done
 
@@ -84,10 +83,10 @@ rationale for not fixing it now.
 ## Hardening checklist before you ship
 
 1. Rotate the Supabase service-role key on first deploy.
-2. Generate `TELEGRAM_WEBHOOK_SECRET` (32+ chars), `N8N_SHARED_SECRET`, `NEXT_PUBLIC_TELEGRAM_LOGIN_BOT_ID` — never reuse values from dev.
-3. In Telegram BotFather, register a domain whitelist for the Login Widget (`/setdomain`) to your Vercel URL.
+2. Generate `TELEGRAM_WEBHOOK_SECRET` (32+ chars) and `SESSION_SECRET` (different value, 32+ chars) — never reuse values from dev.
+3. In Telegram BotFather, register a domain whitelist for the Login Widget (`/setdomain`) to your Vercel URL, and point `/setwebhook` to `https://<your-domain>/api/telegram-webhook`.
 4. Enable Supabase email/password**disabled** (we use Telegram only), as set in `supabase/config.toml`.
-5. Force HTTPS for the n8n webhook URL; add an allowlist of Telegram IPs if n8n is self-hosted.
+5. Force HTTPS for the Vercel webhook URL; Telegram already requires HTTPS for webhooks.
 6. Set up Vercel's env var protection for the deploy branch.
 
 If you want to harden further:

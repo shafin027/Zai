@@ -1,12 +1,16 @@
-// POST /api/entries — record an entry. Broadcasts a Supabase Realtime event
-// AND, for lend/borrow rows, dispatches a Telegram voice note to the
-// counterparty via n8n.
+// POST /api/entries — record an entry. Broadcasts via Supabase Realtime
+// (the dashboard auto-refreshes). For lend/borrow rows where the
+// counterparty has a Telegram-linked Cofre account, a text ping goes
+// straight to Telegram from this server (no n8n dependency in v0.1).
+//
+// In v0.2 when n8n workflows come back, this swaps dispatchCounterpartyText
+// for dispatchCounterpartyVoice and routes through n8n.
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { currentSession } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabase/server';
 import { insertEntry } from '@/lib/supabase/queries';
-import { dispatchNotifyVoice } from '@/lib/n8n/notify';
+import { notifyCounterpartyText } from '@/lib/telegram/notify-counterparty';
 
 const Schema = z.object({
   kind: z.enum(['expense', 'lend', 'borrow', 'settle']),
@@ -85,9 +89,16 @@ export async function POST(req: NextRequest) {
     payload: { kind: row.kind, amount_cents: row.amount_cents, source: 'web' }
   });
 
-  // For lend/borrow: fire-and-forget Telegram voice notify to the counterparty.
-  if (row.kind === 'lend' || row.kind === 'borrow') {
-    void dispatchNotifyVoice({ entryId: row.id, ownerId: profile.id, counterpartyId, kind: row.kind });
+  // For lend/borrow: fire-and-forget a Telegram text ping to the
+  // counterparty (text only in v0.1). Best-effort; failures don't block.
+  if ((row.kind === 'lend' || row.kind === 'borrow') && counterpartyId) {
+    void notifyCounterpartyText({
+      ownerId: profile.id,
+      counterpartyId,
+      kind: row.kind,
+      amountCents: row.amount_cents,
+      currency: row.currency
+    });
   }
 
   return NextResponse.json(row);
