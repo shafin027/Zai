@@ -326,59 +326,68 @@ const ifActionable = ifElse({
 });
 
 const buildRow = node({
-  type: 'n8n-nodes-base.code',
-  version: 2,
+  type: 'n8n-nodes-base.supabase',
+  version: 1,
   config: {
-    name: 'Build Row',
+    name: 'Write Entries (Supabase Node)',
     parameters: {
-      mode: 'runOnceForAllItems',
-      language: 'javaScript',
-      jsCode:
-        "const parsed = $('Parse Intent JSON').item.json;\n" +
-        "const ctx = $('Gather Intent Context').item.json;\n" +
-        "const a = (parsed.actions || [])[0] || { kind: 'unknown' };\n" +
-        "const row = {\n" +
-        "  owner_id: ctx.user.id,\n" +
-        "  counterparty_id: null,\n" +
-        "  kind: a.kind,\n" +
-        "  amount_cents: a.amount_cents,\n" +
-        "  currency: a.currency || ctx.user.default_currency || 'BDT',\n" +
-        "  occurred_at: new Date().toISOString(),\n" +
-        "  memo: a.memo || '',\n" +
-        "  source: 'telegram',\n" +
-        "  confirmed_by_owner: Number(a.confidence || 0) >= 0.7,\n" +
-        "  raw_transcript: ctx.transcript\n" +
-        "};\n" +
-        "return [{ json: row }];"
-    }
+      resource: 'row',
+      operation: 'create',
+      tableId: 'entries',
+      dataToSend: 'defineBelow',
+      fieldsUi: {
+        fieldValues: [
+          { fieldId: 'owner_id', fieldValue: expr("={{ $('Gather Intent Context').item.json.user.id }}") },
+          { fieldId: 'counterparty_id', fieldValue: null },
+          { fieldId: 'kind', fieldValue: expr("={{ $('Parse Intent JSON').item.json.actions[0].kind }}") },
+          { fieldId: 'amount_cents', fieldValue: expr("={{ $('Parse Intent JSON').item.json.actions[0].amount_cents }}") },
+          { fieldId: 'currency', fieldValue: expr("={{ $('Parse Intent JSON').item.json.actions[0].currency || $('Gather Intent Context').item.json.user.default_currency }}") },
+          { fieldId: 'occurred_at', fieldValue: expr("={{ $now.toISOString() }}") },
+          { fieldId: 'memo', fieldValue: expr("={{ $('Parse Intent JSON').item.json.actions[0].memo || $('Gather Intent Context').item.json.transcript }}") },
+          { fieldId: 'source', fieldValue: 'telegram' },
+          { fieldId: 'confirmed_by_owner', fieldValue: expr("={{ $('Parse Intent JSON').item.json.actions[0].confidence >= 0.7 }}") },
+          { fieldId: 'raw_transcript', fieldValue: expr("={{ $('Gather Intent Context').item.json.transcript }}") }
+        ]
+      },
+      options: { useCustomSchema: false, schema: 'public' }
+    },
+    credentials: { supabaseApi: { id: 'gaewtKQMg27QPCVM', name: 'Supabase account' } },
+    onError: 'continueErrorOutput'
   },
-  output: [{ owner_id: '00000000-0000-0000-0000-000000000000', kind: 'expense' }]
+  output: [{ created_at: '2026-08-04T00:00:00Z' }]
 });
 
 const writeEntries = node({
-  type: 'n8n-nodes-base.httpRequest',
-  version: 4.4,
+  type: 'n8n-nodes-base.supabase',
+  version: 1,
   config: {
-    name: 'Write Entries (Supabase)',
+    name: 'Write Entries (Supabase Node)',
     parameters: {
-      method: 'POST',
-      url: expr("={{ $env.SUPABASE_URL }}/rest/v1/entries"),
-      sendHeaders: true,
-      specifyHeaders: 'keypair',
-      headerParameters: { parameters: [
-        { name: 'apikey', value: expr('={{ $env.SUPABASE_SERVICE_ROLE_KEY }}') },
-        { name: 'Authorization', value: expr('={{ \'Bearer \' + $env.SUPABASE_SERVICE_ROLE_KEY }}') },
-        { name: 'Content-Type', value: 'application/json' }
-      ] },
-      sendBody: true,
-      contentType: 'json',
-      specifyBody: 'json',
-      jsonBody: expr("={{ JSON.stringify([$('Build Row').item.json]) }}"),
-      options: { response: { response: { responseFormat: 'json' } }, timeout: 15000 }
+      resource: 'row',
+      operation: 'create',
+      tableId: 'entries',
+      dataToSend: 'defineBelow',
+      fieldsUi: {
+        fieldValues: [
+          { fieldId: 'owner_id', fieldValue: expr("={{ $('Build Row').item.json.owner_id }}") },
+          { fieldId: 'counterparty_id', fieldValue: expr("={{ $('Build Row').item.json.counterparty_id }}") },
+          { fieldId: 'kind', fieldValue: expr("={{ $('Build Row').item.json.kind }}") },
+          { fieldId: 'amount_cents', fieldValue: expr("={{ $('Build Row').item.json.amount_cents }}") },
+          { fieldId: 'currency', fieldValue: expr("={{ $('Build Row').item.json.currency }}") },
+          { fieldId: 'occurred_at', fieldValue: expr("={{ $('Build Row').item.json.occurred_at }}") },
+          { fieldId: 'memo', fieldValue: expr("={{ $('Build Row').item.json.memo }}") },
+          { fieldId: 'source', fieldValue: 'telegram' },
+          { fieldId: 'confirmed_by_owner', fieldValue: expr("={{ $('Build Row').item.json.confirmed_by_owner }}") },
+          { fieldId: 'raw_transcript', fieldValue: expr("={{ $('Build Row').item.json.raw_transcript }}") },
+          { fieldId: 'tour_id', fieldValue: expr("={{ $('Build Row').item.json.tour_id || null }}") }
+        ]
+      },
+      options: { useCustomSchema: false, schema: 'public' }
     },
+    credentials: { supabaseApi: { id: 'gaewtKQMg27QPCVM', name: 'Supabase account' } },
     onError: 'continueErrorOutput'
   },
-  output: []
+  output: [{ created_at: '2026-08-04T00:00:00Z' }]
 });
 
 // ============================================================
@@ -432,6 +441,61 @@ const responseParser = outputParserStructured({
       }
     }
   }
+});
+
+
+const checkOrCreateRelation = node({
+  type: 'n8n-nodes-base.supabase',
+  version: 1,
+  config: {
+    name: 'Check/Create Relation',
+    parameters: {
+      resource: 'row',
+      operation: 'get',
+      tableId: 'relations',
+      filterType: 'and',
+      conditions: {
+        conditions: [{
+          column: 'owner_id',
+          value: expr("={{ $('Build Row').item.json.owner_id }}")
+        }, {
+          column: 'friend_id',
+          value: expr("={{ $('Load Friends').item.json.find(f => f.friend.telegram_username === $('Gather Intent Context').item.json.transcript.match(/\w+/g)?.join('') || 'none') }}")
+        }]
+      },
+      options: { useCustomSchema: false, schema: 'public' }
+    },
+    credentials: { supabaseApi: { id: 'gaewtKQMg27QPCVM', name: 'Supabase account' } },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ id: '', owner_id: '', friend_id: '', status: 'pending' }]
+});
+
+const createRelation = node({
+  type: 'n8n-nodes-base.supabase',
+  version: 1,
+  config: {
+    name: 'Create Relation (if missing)',
+    parameters: {
+      resource: 'row',
+      operation: 'create',
+      tableId: 'relations',
+      dataToSend: 'defineBelow',
+      fieldsUi: {
+        fieldValues: [
+          { fieldId: 'owner_id', fieldValue: expr("={{ $('Build Row').item.json.owner_id }}") },
+          { fieldId: 'friend_id', fieldValue: expr("={{ $('Load Friends').item.json[0] ? $('Load Friends').item.json[0].friend.id || $('Load Sender Context').item.json[0].id : $('Load Sender Context').item.json[0].id }}") },
+          { fieldId: 'status', fieldValue: 'pending' },
+          { fieldId: 'invite_token', fieldValue: expr("={{ Math.random().toString(36).substring(2, 26) }}") },
+          { fieldId: 'invited_at', fieldValue: expr("={{ $now.toISOString() }}") }
+        ]
+      },
+      options: { useCustomSchema: false, schema: 'public' }
+    },
+    credentials: { supabaseApi: { id: 'gaewtKQMg27QPCVM', name: 'Supabase account' } },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ id: '', owner_id: '', friend_id: '' }]
 });
 
 const aiResponseAgent = node({
@@ -539,7 +603,7 @@ export default workflow('cofre-telegram-text-ledger-ai', 'Cofre Telegram Text Le
       .onTrue(
         buildRow
           .to(writeEntries)
-          .to(aiResponseAgent)
+          .to(checkOrCreateRelation).to(createRelation).to(aiResponseAgent)
           .to(sendReply)
           .to(respondOK)
       )
