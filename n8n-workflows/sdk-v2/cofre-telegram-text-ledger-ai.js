@@ -390,6 +390,39 @@ const writeEntries = node({
   output: [{ created_at: '2026-08-04T00:00:00Z' }]
 });
 
+const checkCreateRelation = node({
+  type: 'n8n-nodes-base.supabase',
+  version: 1,
+  config: {
+    name: 'Check/Create Relation',
+    parameters: {
+      resource: 'row',
+      operation: 'upsert',
+      tableId: 'relations',
+      dataToSend: 'defineBelow',
+      fieldsUi: {
+        fieldValues: [
+          { fieldId: 'owner_id', fieldValue: expr("={{ $('Gather Intent Context').item.json.user.id }}") },
+          { fieldId: 'friend_id', fieldValue: expr("={{ (() => { const cp = $('Parse Intent JSON').item.json.actions[0].counterparty_name; if (!cp) return null; const friends = $('Gather Intent Context').item.json.friends || []; const match = friends.find(f => f.friend?.first_name?.toLowerCase() === cp.toLowerCase() || f.friend?.telegram_username?.toLowerCase() === cp.toLowerCase()); return match?.friend?.id || null; })() }}") },
+          { fieldId: 'status', fieldValue: 'pending' },
+          { fieldId: 'invite_token', fieldValue: expr("={{ (() => { const crypto = require('crypto'); return crypto.randomBytes(16).toString('hex'); })() }}") }
+        ]
+      },
+      options: {
+        useCustomSchema: false,
+        schema: 'public',
+        upsertOptions: {
+          onConflict: 'owner_id,friend_id',
+          ignoreDuplicate: false
+        }
+      }
+    },
+    credentials: { supabaseApi: { id: 'gaewtKQMg27QPCVM', name: 'Supabase account' } },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ id: 0, owner_id: '', friend_id: '', status: 'pending', invite_token: '' }]
+});
+
 // ============================================================
 //  AI AGENT FOR NATURAL RESPONSE GENERATION
 // ============================================================
@@ -443,60 +476,6 @@ const responseParser = outputParserStructured({
   }
 });
 
-
-const checkOrCreateRelation = node({
-  type: 'n8n-nodes-base.supabase',
-  version: 1,
-  config: {
-    name: 'Check/Create Relation',
-    parameters: {
-      resource: 'row',
-      operation: 'get',
-      tableId: 'relations',
-      filterType: 'and',
-      conditions: {
-        conditions: [{
-          column: 'owner_id',
-          value: expr("={{ $('Build Row').item.json.owner_id }}")
-        }, {
-          column: 'friend_id',
-          value: expr("={{ $('Load Friends').item.json.find(f => f.friend.telegram_username === $('Gather Intent Context').item.json.transcript.match(/\w+/g)?.join('') || 'none') }}")
-        }]
-      },
-      options: { useCustomSchema: false, schema: 'public' }
-    },
-    credentials: { supabaseApi: { id: 'gaewtKQMg27QPCVM', name: 'Supabase account' } },
-    onError: 'continueErrorOutput'
-  },
-  output: [{ id: '', owner_id: '', friend_id: '', status: 'pending' }]
-});
-
-const createRelation = node({
-  type: 'n8n-nodes-base.supabase',
-  version: 1,
-  config: {
-    name: 'Create Relation (if missing)',
-    parameters: {
-      resource: 'row',
-      operation: 'create',
-      tableId: 'relations',
-      dataToSend: 'defineBelow',
-      fieldsUi: {
-        fieldValues: [
-          { fieldId: 'owner_id', fieldValue: expr("={{ $('Build Row').item.json.owner_id }}") },
-          { fieldId: 'friend_id', fieldValue: expr("={{ $('Load Friends').item.json[0] ? $('Load Friends').item.json[0].friend.id || $('Load Sender Context').item.json[0].id : $('Load Sender Context').item.json[0].id }}") },
-          { fieldId: 'status', fieldValue: 'pending' },
-          { fieldId: 'invite_token', fieldValue: expr("={{ Math.random().toString(36).substring(2, 26) }}") },
-          { fieldId: 'invited_at', fieldValue: expr("={{ $now.toISOString() }}") }
-        ]
-      },
-      options: { useCustomSchema: false, schema: 'public' }
-    },
-    credentials: { supabaseApi: { id: 'gaewtKQMg27QPCVM', name: 'Supabase account' } },
-    onError: 'continueErrorOutput'
-  },
-  output: [{ id: '', owner_id: '', friend_id: '' }]
-});
 
 const aiResponseAgent = node({
   type: '@n8n/n8n-nodes-langchain.agent',
@@ -603,7 +582,8 @@ export default workflow('cofre-telegram-text-ledger-ai', 'Cofre Telegram Text Le
       .onTrue(
         buildRow
           .to(writeEntries)
-          .to(checkOrCreateRelation).to(createRelation).to(aiResponseAgent)
+          .to(checkCreateRelation)
+          .to(aiResponseAgent)
           .to(sendReply)
           .to(respondOK)
       )
@@ -624,5 +604,6 @@ gatherContext.onError(respondError);
 extractIntent.onError(respondError);
 buildRow.onError(respondError);
 writeEntries.onError(respondError);
+checkCreateRelation.onError(respondError);
 aiResponseAgent.onError(respondError);
 sendReply.onError(respondError);
