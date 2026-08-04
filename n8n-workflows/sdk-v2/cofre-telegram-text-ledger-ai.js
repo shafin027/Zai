@@ -495,11 +495,11 @@ const aiResponseAgent = node({
         "+ 'COUNTERPARTY: ' + ($('Parse Intent JSON').item.json.actions[0].counterparty_name || 'none') + '\\n'\n" +
         "+ 'TOUR: ' + ($('Parse Intent JSON').item.json.actions[0].tour_nickname || 'none') + '\\n'\n" +
         "+ 'MEMO: ' + ($('Parse Intent JSON').item.json.actions[0].memo || '') + '\\n\\n'\n" +
-        "+ 'Return JSON: { text: string, language: en|bn }' }}"
+        "+ 'DO NOT include any JSON formatting, braces, or labels in the final reply. Just return the plain text message as text, and the language code separately. Example reply text: Logged. Lent BDT 500 to Raihan. Example language: en' }}"
       ),
       hasOutputParser: true,
       options: {
-        systemMessage: 'You are Cofre, a friendly personal finance assistant. Generate natural, concise confirmation messages in the user's language (Bangla or English). Keep responses under 160 characters, conversational, one human breath. No emojis, no markdown.',
+        systemMessage: 'You are Cofre, a real human friend who helps with personal finances. You speak naturally — brief, warm, conversational — never robotic. Confirm each entry as a person would talk. Use Bangla or English based on the user's locale. Keep it under 160 chars. No JSON objects in the reply — just a plain text message like: 'Got it! Lent BDT 500 to Raihan.' or 'Logged! Spent BDT 200 for lunch.' Sound like a human, not a bot.',
         maxIterations: 3,
         enableStreaming: false
       }
