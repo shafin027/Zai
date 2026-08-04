@@ -334,8 +334,8 @@ const buildRow = node({
       mode: 'runOnceForAllItems',
       language: 'javaScript',
       jsCode:
-        "const parsed = $json;\n" +
-        "const ctx = $json;\n" +
+        "const parsed = $('Parse Intent JSON').item.json;\n" +
+        "const ctx = $('Gather Intent Context').item.json;\n" +
         "const a = (parsed.actions || [])[0] || { kind: 'unknown' };\n" +
         "const row = {\n" +
         "  owner_id: ctx.user.id,\n" +
