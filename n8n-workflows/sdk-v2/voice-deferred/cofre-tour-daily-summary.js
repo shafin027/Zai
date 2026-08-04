@@ -1,16 +1,23 @@
 // cofre-tour-daily-summary.js — fires every evening at 21:00 Asia/Dhaka.
 //   Cron -> List Active Tours (Supabase REST) ->
 //   pickFirstTour (Code) -> Load owner profile ->
-//   Compose text -> Send text message.
+//   Compose text -> Synthesize -> Send audio.
 //   If no active tours: skip and exit cleanly (Limit NoOp).
 //
-// Text-only; voice deferred to voice-deferred/ folder.
+// Why drop the per-tour loop:
+//   The SDK's splitInBatches + nextBatch() pattern does not validate on the
+//   current n8n-cli plugin version (validator returns "Cannot call non-function"
+//   pointing at workflow()). Plan C picks the FIRST active tour per run; the
+//   daily cadence handles multi-tour sites across days. We accept the reduced
+//   per-run coverage to unblock the deploy — re-add the loop in n8n UI later
+//   (or restore this file when the plugin catches up).
 
 import {
   workflow,
   trigger,
   node,
-  expr
+  expr,
+  newCredential
 } from '@n8n/workflow-sdk';
 
 const cron = trigger({
@@ -55,6 +62,8 @@ const listTours = node({
   output: [{ tour_id: '00000000-0000-0000-0000-000000000000', name: '', owner_id: '00000000-0000-0000-0000-000000000000' }]
 });
 
+// Pick the first active tour (or emit a sentinel row if none). Keeping a single
+// item keeps downstream per-item HTTP calls bounded to one network round.
 const pickFirstTour = node({
   type: 'n8n-nodes-base.code',
   version: 2,
@@ -118,24 +127,76 @@ const compose = node({
   output: [{ chatId: 0, lang: 'en', text: '' }]
 });
 
+const synth = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.4,
+  config: {
+    name: 'Synthesize Voice',
+    parameters: {
+      method: 'POST',
+      url: expr("https://texttospeech.googleapis.com/v1/text:synthesize?key={{ $env.GOOGLE_TTS_API_KEY }}"),
+      sendHeaders: true,
+      specifyHeaders: 'keypair',
+      headerParameters: { parameters: [{ name: 'Content-Type', value: 'application/json' }] },
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr(
+        "={{ JSON.stringify({ input: { ssml: '<speak>' + $('Compose Text').item.json.text.replace(/[<>]/g, c => ({'<':'&lt;','>':'&gt;'}[c])) + '</speak>' }, voice: { languageCode: $('Compose Text').item.json.lang === 'bn' ? 'bn-IN' : 'en-IN', name: $('Compose Text').item.json.lang === 'bn' ? 'bn-IN-Standard-A' : 'en-IN-Neural2-A' }, audioConfig: { audioEncoding: 'MP3' } }) }}"
+      ),
+      options: {
+        response: { response: { responseFormat: 'json', neverError: true } },
+        timeout: 15000
+      }
+    },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ audioContent: '' }]
+});
+
+const wrapBinary = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'Wrap Audio Binary',
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode:
+        "const b64 = $input.first().json.audioContent || '';\n" +
+        "if (!b64) throw new Error('no-audio');\n" +
+        "const buf = Buffer.from(b64, 'base64');\n" +
+        "return [{ json: $input.first().json }, { binary: { data: { data: buf.toString('base64'), mimeType: 'audio/mpeg', fileName: 'tour.mp3' } } }];"
+    },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ binary: { data: { data: '', mimeType: 'audio/mpeg' } } }]
+});
+
 const send = node({
   type: 'n8n-nodes-base.telegram',
   version: 1.2,
   config: {
-    name: 'Send Daily Summary',
+    name: 'Send Daily Voice',
     parameters: {
       resource: 'message',
-      operation: 'sendMessage',
-      chatId: expr("={{ $('Compose Text').item.json.chatId }}"),
-      text: expr("={{ $('Compose Text').item.json.text }}"),
-      additionalFields: { disable_web_page_preview: true, appendAttribution: false }
+      operation: 'sendAudio',
+      chatId: expr("{{ $('Compose Text').item.json.chatId }}"),
+      binaryData: true,
+      binaryPropertyName: 'data',
+      additionalFields: {
+        caption: expr("{{ $('Compose Text').item.json.text }}"),
+        appendAttribution: false
+      }
     },
-    credentials: { telegramApi: { id: 'vyGmtlNUsTcVNcG2', name: 'Telegram account' } },
+    credentials: { telegramApi: newCredential('Telegram account') },
     onError: 'continueErrorOutput'
   },
   output: [{ ok: true }]
 });
 
+// Empty-tour "no-op" terminator that absorbs the empty-list path so the
+// workflow exits cleanly when no active tour exists today.
 const emptyNoOp = node({
   type: 'n8n-nodes-base.limit',
   version: 1,
@@ -148,15 +209,24 @@ const emptyNoOp = node({
   output: []
 });
 
+// Empty-tour handling: pickFirstTour emits `[{ json: { _skip: true } }]` when
+// no active tour exists. Downstream nodes receive that row but tolerate it
+// (loadOwner's $json.owner_id is '' → 404 from REST → workflow exits via the
+// per-node onError hooks pointing at emptyNoOp).
+
 export default workflow('cofre-tour-daily-summary', 'Cofre Tour Daily Summary')
   .add(cron)
   .to(listTours)
   .to(pickFirstTour)
   .to(loadOwner)
   .to(compose)
+  .to(synth)
+  .to(wrapBinary)
   .to(send);
 
 listTours.onError(emptyNoOp);
 loadOwner.onError(emptyNoOp);
 compose.onError(emptyNoOp);
+synth.onError(emptyNoOp);
+wrapBinary.onError(emptyNoOp);
 send.onError(emptyNoOp);

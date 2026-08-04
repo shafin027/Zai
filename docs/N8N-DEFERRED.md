@@ -1,4 +1,4 @@
-# n8n workflows — deferred
+# n8n workflows — deferred (voice)
 
 This folder originally shipped four hand-written n8n workflow JSONs that
 parsed as valid n8n exports but were guaranteed to fail against the actual
@@ -23,7 +23,7 @@ internal wiring of branch chains still had unfixed bugs (`hasVoiceData
 needed several more `validate_workflow → fix → revalidate` cycles to clear,
 per the SDK's "validate, validate, validate again" guidance.
 
-## What's shipped instead
+## What's shipped instead (text-only)
 
 `web/lib/telegram/text-fallback.ts` + `web/app/api/telegram-webhook/route.ts`.
 
@@ -39,7 +39,26 @@ There is **no STT** and **no TTS** in this version. Voice capture,
 voice reply, and the original "different from the market" pitch are
 not in v0.1.
 
-## How to bring n8n back
+## Text-only n8n layer (now live)
+
+As of this deploy, a **text-only n8n layer** is running:
+- `cofre-telegram-text-ledger` — Telegram webhook → HMAC verify → intent extract (OpenRouter) → Supabase write → text reply
+- `cofre-notify` — HMAC-signed webhook → compose → send text to counterparty
+- `cofre-tour-daily-summary` — cron 21:00 Asia/Dhaka → compose tour summary text → send to leader
+- `cofre-error-workflow` — error trigger catch-all → Telegram alert to owner
+
+All four workflows use `sendMessage` (text). No TTS/Whisper nodes. No `GOOGLE_TTS_API_KEY` or `GROQ_API_KEY` required in n8n.
+
+The SDK source files are at:
+```
+n8n-workflows/sdk-v2/
+  cofre-telegram-text-ledger.js
+  cofre-notify.js
+  cofre-tour-daily-summary.js
+  cofre-error-workflow.js
+```
+
+## How to add voice back (v0.2)
 
 When you're ready, the path is:
 
@@ -47,7 +66,9 @@ When you're ready, the path is:
    the rotated JWT in shell env, ask it to build the four workflows
    properly using the SDK.
 2. Each workflow must:
-   - Use `operation: "sendAudio"` instead of `sendVoice`.
+   - Use `operation: "sendAudio"` with `binaryData: true` instead of `sendMessage`.
+   - Add Google TTS (or ElevenLabs) HTTP Request node for synthesis.
+   - Add Groq Whisper (or equivalent) HTTP Request node for STT.
    - Do all HTTP calls via `httpRequest` v4.4 nodes, never from a
      `code` node.
    - Use one webhook per workflow, not per branch — branch via
@@ -56,16 +77,18 @@ When you're ready, the path is:
 4. Create via `create_workflow_from_code`.
 5. Activate.
 6. Set Vercel `N8N_WEBHOOK_INGRESS_URL` to the notify workflow's URL.
-7. Set BotFather @setdomain to your Vercel domain.
+7. Set BotFather `@setdomain` to your Vercel domain.
 8. Smoke-test by sending a voice note and confirming audio lands in
    Supabase.
 
-Files referenced by this folder before the deletion:
-
-- `n8n/workflows/cofre-telegram-voice-ledger.json` — main voice ingest
-- `n8n/workflows/cofre-telegram-notify.json` (under `web/`) — counterparty notify
-- `n8n/workflows/cofre-tour-daily-summary.json` — daily tour voice summary
-- `n8n/workflows/cofre-error-workflow.json` — error-workflow catch-all
+The previous TTS/Whisper-using SDK versions are preserved in:
+```
+n8n-workflows/sdk-v2/voice-deferred/
+  cofre-voice-ledger.js
+  cofre-notify.js
+  cofre-tour-daily-summary.js
+```
+You can use them as a starting point for v0.2.
 
 Replacing them is safe — there's no Vercel env point at them right now.
 `N8N_WEBHOOK_INGRESS_URL` is left blank by default; set it when the

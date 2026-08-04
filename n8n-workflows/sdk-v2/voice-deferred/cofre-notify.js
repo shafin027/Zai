@@ -1,14 +1,20 @@
-// cofre-notify.js — counterparty text notification (no TTS, no Whisper).
-// Voice path deferred; see voice-deferred/ folder.
+// cofre-notify.js — counterparty voice-notification workflow.
 //
 // Triggered by `web/lib/n8n/notify.ts` POSTing to N8N_WEBHOOK_INGRESS_URL.
-//   Webhook  ->  Verify HMAC  ->  Compose  ->  Send text  ->  Respond 200
+//   Webhook  ->  Verify HMAC  ->  Typing  ->  Compose  ->  Synthesize voice  ->  Send audio  ->  Respond 200
+//
+// Why no @n8n/n8n-nodes-langchain.agent: see cofre-voice-ledger.js header.
+//
+// Credentials used:
+//   - "Telegram account" (type telegramApi)
+//   - "OpenRouter" Bearer not used; this workflow only emits a fixed local copy.
 
 import {
   workflow,
   trigger,
   node,
-  expr
+  expr,
+  newCredential
 } from '@n8n/workflow-sdk';
 
 const webhook = trigger({
@@ -52,6 +58,24 @@ const verifyHmac = node({
   output: [{ recipient: {}, origin: {}, kind: 'lend' }]
 });
 
+const typing = node({
+  type: 'n8n-nodes-base.telegram',
+  version: 1.2,
+  config: {
+    name: 'Typing',
+    parameters: {
+      resource: 'message',
+      operation: 'sendChatAction',
+      chatId: expr("{{ $json.recipient.telegram_id }}"),
+      action: 'record_voice',
+      additionalFields: { appendAttribution: false }
+    },
+    credentials: { telegramApi: newCredential('Telegram account') },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ ok: true }]
+});
+
 const compose = node({
   type: 'n8n-nodes-base.code',
   version: 2,
@@ -82,19 +106,69 @@ const compose = node({
   output: [{ chatId: 0, text: '', lang: 'en' }]
 });
 
-const sendText = node({
+const synth = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.4,
+  config: {
+    name: 'Synthesize Voice',
+    parameters: {
+      method: 'POST',
+      url: expr("https://texttospeech.googleapis.com/v1/text:synthesize?key={{ $env.GOOGLE_TTS_API_KEY }}"),
+      sendHeaders: true,
+      specifyHeaders: 'keypair',
+      headerParameters: { parameters: [
+        { name: 'Content-Type', value: 'application/json' }
+      ] },
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr("={{ JSON.stringify({ input: { ssml: '<speak>' + $('Compose Text').item.json.text.replace(/[<>]/g, c => ({'<':'&lt;','>':'&gt;'}[c])) + '</speak>' }, voice: { languageCode: $('Compose Text').item.json.lang === 'bn' ? 'bn-IN' : 'en-IN', name: $('Compose Text').item.json.lang === 'bn' ? 'bn-IN-Standard-A' : 'en-IN-Neural2-A' }, audioConfig: { audioEncoding: 'MP3' } }) }}"),
+      options: {
+        response: { response: { responseFormat: 'json', neverError: true } },
+        timeout: 15000
+      }
+    },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ audioContent: '' }]
+});
+
+const writeTtsBinary = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'Wrap Audio Binary',
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode:
+        "const audioB64 = $input.first().json.audioContent || '';\n" +
+        "if (!audioB64) throw new Error('no-audio');\n" +
+        "const buf = Buffer.from(audioB64, 'base64');\n" +
+        "return [{ json: $input.first().json }, { binary: { data: { data: buf.toString('base64'), mimeType: 'audio/mpeg', fileName: 'voice.mp3' } } }];"
+    },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ binary: { data: { data: '', mimeType: 'audio/mpeg' } } }]
+});
+
+const sendVoice = node({
   type: 'n8n-nodes-base.telegram',
   version: 1.2,
   config: {
-    name: 'Send Text',
+    name: 'Send Voice',
     parameters: {
       resource: 'message',
-      operation: 'sendMessage',
-      chatId: expr("={{ $('Compose Text').item.json.chatId }}"),
-      text: expr("={{ $('Compose Text').item.json.text }}"),
-      additionalFields: { disable_web_page_preview: true, appendAttribution: false }
+      operation: 'sendAudio',
+      chatId: expr("{{ $('Compose Text').item.json.chatId }}"),
+      binaryData: true,
+      binaryPropertyName: 'data',
+      additionalFields: {
+        caption: expr("{{ $('Compose Text').item.json.text }}"),
+        appendAttribution: false
+      }
     },
-    credentials: { telegramApi: { id: 'vyGmtlNUsTcVNcG2', name: 'Telegram account' } },
+    credentials: { telegramApi: newCredential('Telegram account') },
     onError: 'continueErrorOutput'
   },
   output: [{ ok: true }]
@@ -107,7 +181,7 @@ const respondOK = node({
     name: 'Respond 200',
     parameters: {
       respondWith: 'json',
-      responseBody: expr("={{ JSON.stringify({ ok: true }) }}"),
+      responseBody: expr("{{ JSON.stringify({ ok: true }) }}"),
       options: { responseCode: 200 }
     }
   },
@@ -121,7 +195,7 @@ const respondError = node({
     name: 'Respond 500',
     parameters: {
       respondWith: 'json',
-      responseBody: expr("={{ JSON.stringify({ ok: false }) }}"),
+      responseBody: expr("{{ JSON.stringify({ ok: false }) }}"),
       options: { responseCode: 500 }
     }
   },
@@ -131,10 +205,15 @@ const respondError = node({
 export default workflow('cofre-notify', 'Cofre Notify')
   .add(webhook)
   .to(verifyHmac)
+  .to(typing)
   .to(compose)
-  .to(sendText)
+  .to(synth)
+  .to(writeTtsBinary)
+  .to(sendVoice)
   .to(respondOK);
 
 verifyHmac.onError(respondError);
-compose.onError(respondError);
-sendText.onError(respondError);
+typing.onError(respondError);
+synth.onError(respondError);
+writeTtsBinary.onError(respondError);
+sendVoice.onError(respondError);

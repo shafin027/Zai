@@ -1,18 +1,15 @@
-// cofre-tour-daily-summary.js — fires every evening at 21:00 Asia/Dhaka.
-//   Cron -> List Active Tours (Supabase REST) ->
-//   pickFirstTour (Code) -> Load owner profile ->
-//   Compose text -> Send text message.
-//   If no active tours: skip and exit cleanly (Limit NoOp).
-//
-// Text-only; voice deferred to voice-deferred/ folder.
+import workflowSdk from '@n8n/workflow-sdk';
+import { writeFileSync } from 'fs';
+const { 
+  workflow, 
+  trigger, 
+  node, 
+  expr, 
+  newCredential, 
+  validateWorkflow 
+} = workflowSdk;
 
-import {
-  workflow,
-  trigger,
-  node,
-  expr
-} from '@n8n/workflow-sdk';
-
+// Build the workflow using SDK functions directly
 const cron = trigger({
   type: 'n8n-nodes-base.scheduleTrigger',
   version: 1.3,
@@ -118,19 +115,69 @@ const compose = node({
   output: [{ chatId: 0, lang: 'en', text: '' }]
 });
 
+const synth = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.4,
+  config: {
+    name: 'Synthesize Voice',
+    parameters: {
+      method: 'POST',
+      url: expr("https://texttospeech.googleapis.com/v1/text:synthesize?key={{ $env.GOOGLE_TTS_API_KEY }}"),
+      sendHeaders: true,
+      specifyHeaders: 'keypair',
+      headerParameters: { parameters: [{ name: 'Content-Type', value: 'application/json' }] },
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr(
+        "={{ JSON.stringify({ input: { ssml: '<speak>' + $('Compose Text').item.json.text.replace(/[<>]/g, c => ({'<':'&lt;','>':'&gt;'}[c])) + '</speak>' }, voice: { languageCode: $('Compose Text').item.json.lang === 'bn' ? 'bn-IN' : 'en-IN', name: $('Compose Text').item.json.lang === 'bn' ? 'bn-IN-Standard-A' : 'en-IN-Neural2-A' }, audioConfig: { audioEncoding: 'MP3' } }) }}"
+      ),
+      options: {
+        response: { response: { responseFormat: 'json', neverError: true } },
+        timeout: 15000
+      }
+    },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ audioContent: '' }]
+});
+
+const wrapBinary = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'Wrap Audio Binary',
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode:
+        "const b64 = $input.first().json.audioContent || '';\n" +
+        "if (!b64) throw new Error('no-audio');\n" +
+        "const buf = Buffer.from(b64, 'base64');\n" +
+        "return [{ json: $input.first().json }, { binary: { data: { data: buf.toString('base64'), mimeType: 'audio/mpeg', fileName: 'tour.mp3' } } }];"
+    },
+    onError: 'continueErrorOutput'
+  },
+  output: [{ binary: { data: { data: '', mimeType: 'audio/mpeg' } } }]
+});
+
 const send = node({
   type: 'n8n-nodes-base.telegram',
   version: 1.2,
   config: {
-    name: 'Send Daily Summary',
+    name: 'Send Daily Voice',
     parameters: {
       resource: 'message',
-      operation: 'sendMessage',
-      chatId: expr("={{ $('Compose Text').item.json.chatId }}"),
-      text: expr("={{ $('Compose Text').item.json.text }}"),
-      additionalFields: { disable_web_page_preview: true, appendAttribution: false }
+      operation: 'sendAudio',
+      chatId: expr("{{ $('Compose Text').item.json.chatId }}"),
+      binaryData: true,
+      binaryPropertyName: 'data',
+      additionalFields: {
+        caption: expr("{{ $('Compose Text').item.json.text }}"),
+        appendAttribution: false
+      }
     },
-    credentials: { telegramApi: { id: 'vyGmtlNUsTcVNcG2', name: 'Telegram account' } },
+    credentials: { telegramApi: newCredential('Telegram account') },
     onError: 'continueErrorOutput'
   },
   output: [{ ok: true }]
@@ -148,15 +195,34 @@ const emptyNoOp = node({
   output: []
 });
 
-export default workflow('cofre-tour-daily-summary', 'Cofre Tour Daily Summary')
+const wf = workflow('cofre-tour-daily-summary', 'Cofre Tour Daily Summary')
   .add(cron)
   .to(listTours)
   .to(pickFirstTour)
   .to(loadOwner)
   .to(compose)
-  .to(send);
+  .to(synth)
+  .to(wrapBinary)
+  .to(send)
+  .add(emptyNoOp);
 
 listTours.onError(emptyNoOp);
 loadOwner.onError(emptyNoOp);
 compose.onError(emptyNoOp);
+synth.onError(emptyNoOp);
+wrapBinary.onError(emptyNoOp);
 send.onError(emptyNoOp);
+
+try {
+  const built = wf.toJSON();
+  
+  // Save for n8n-mcp
+  writeFileSync('/tmp/workflow-built-fixed.json', JSON.stringify(built, null, 2));
+  
+  // Validate with SDK
+  const result = await validateWorkflow(built, { profile: 'runtime' });
+  console.log('=== SDK Validation Result ===');
+  console.log(JSON.stringify(result, null, 2));
+} catch (err) {
+  console.error('Validation error:', err);
+}

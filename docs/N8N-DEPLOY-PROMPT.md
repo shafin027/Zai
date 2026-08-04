@@ -10,9 +10,9 @@ The four SDK workflow files are at:
 
 ```
 /Users/shafin.mahamud/Documents/Claude/Personal Project/n8n-workflows/sdk-v2/
-  cofre-voice-ledger.js          → Telegram voice/text ingest (27 nodes)
-  cofre-notify.js                → counterparty voice ping (9 nodes)
-  cofre-tour-daily-summary.js    → cron 21:00 Asia/Dhaka leader summary (9 nodes)
+  cofre-telegram-text-ledger.js  → Telegram text ingest (no TTS/STT, 13 nodes)
+  cofre-notify.js                → counterparty text ping (5 nodes)
+  cofre-tour-daily-summary.js    → cron 21:00 Asia/Dhaka leader summary (6 nodes)
   cofre-error-workflow.js        → error-trigger catch-all (3 nodes)
 ```
 
@@ -66,7 +66,7 @@ remaining gate is the live MCP deploy.
    - Run `mcp__n8n-mcp__n8n_get_workflow({ id, mode: 'filtered',
      nodeNames: ['Verify HMAC','Fetch Friends','Fetch Active Tours',
      'Extract Intent (OpenRouter Claude)','Write Entries
-     (Supabase)','Synthesize Voice (Google TTS)','Send Reply Audio'] })`.
+     (Supabase)','Send Reply'] })`.
      Inspect each node's `onError` (must be `continueErrorOutput`) and
      confirm the connections map wires `main[1]` to a handler on each
      one. **This is the gate the SDK reference calls "necessary, not
@@ -75,8 +75,6 @@ remaining gate is the live MCP deploy.
      - `Telegram account` (telegramApi) — auto-binds.
      - `OpenRouter HTTP` (httpBearerAuth) — user creates from their
        OpenRouter key.
-     - `GROQ Bearer` (httpBearerAuth) — user creates from
-       https://console.groq.com → API keys.
      - **Do not paste the bearer tokens in this chat.** Even when
        driving `manage_credentials`, the user pastes them in their
        own shell and the pass-through uses env-only references.
@@ -97,13 +95,13 @@ remaining gate is the live MCP deploy.
    `using-n8n-mcp-skills` router):
 
    - **Workflow Settings → Error Workflow**: for each of the three
-     unattended workflows (`cofre-voice-ledger`,
+     unattended workflows (`cofre-telegram-text-ledger`,
      `cofre-tour-daily-summary`, `cofre-notify`), set the Error Workflow
      to `cofre-error-workflow`. The MCP server explicitly says this is
      UI-only.
    - **Telegram @BotFather** — `/setwebhook
      https://<n8n-host>/webhook/cofre-telegram` — point the bot at the
-     voice-ledger webhook.
+     text-ledger webhook.
    - **Per-workflow Credentials** — wire the bound credentials to the
      right nodes. The express pattern in
      `n8n-workflows/sdk-v2/README.md` calls this out.
@@ -115,11 +113,11 @@ remaining gate is the live MCP deploy.
 
 8. **Smoke-test**:
    - Open Telegram, send `"spent 200 for the dhaka-trip lunch"` to the
-     bot. The voice-ledger workflow should respond with a Bangla voice
-     note: "লগড। লগড। BDT 200 খরচ। মনে রাখলাম।" or equivalent.
+     bot. The text-ledger workflow should respond with a Bangla text
+     confirmation: "লগড। BDT 200 খরচ। মনে রাখলাম।" or equivalent.
    - Send a `lend` entry against a friend who has a Cofre-linked
      Telegram account. The notify workflow should pick it up and fire
-     a voice reply to them.
+     a text ping to them.
    - Manually trigger `cofre-error-workflow` from the n8n UI to verify
      the alert channel reaches the user's Telegram.
 
@@ -172,8 +170,10 @@ of truth. Common ones:
 - **Supabase schema** at `supabase/migrations/0001_init.sql` (personal
   + friends ledger) + `0002_tours.sql` (tours with allocations).
 - **n8n workflow SDK sources** at
-  `n8n-workflows/sdk-v2/cofre-{voice-ledger,notify,tour-daily-summary,
+  `n8n-workflows/sdk-v2/cofre-{telegram-text-ledger,notify,tour-daily-summary,
   error-workflow}.js`.
+- **Voice-deferred** at `n8n-workflows/sdk-v2/voice-deferred/` —
+  previous TTS/Whisper versions preserved for future v0.2 re-add.
 - **Security audit** at `docs/SECURITY.md`.
 - **Deploy runbook** at `docs/DEPLOY.md`.
 - **Pre-deploy checks** at `scripts/pre-deploy-check.sh` —
@@ -182,5 +182,6 @@ of truth. Common ones:
 
 The text-mode Telegram fallback at `web/app/api/telegram-webhook/route.ts`
 is **already running in production-equivalent** without n8n. Adding
-n8n is the audio layer the user asked to bring back. None of that
+n8n is the text-entry layer the user asked for. Voice (STT/TTS) is
+deferred to v0.2 and lives in `voice-deferred/`. None of that
 breaks when n8n comes online; it's pure additive.
