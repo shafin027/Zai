@@ -467,8 +467,8 @@ const responseParser = outputParserStructured({
       schema: {
         type: 'object',
         properties: {
-          text: { type: 'string', description: 'The natural response text to send to user' },
-          language: { type: 'string', enum: ['en', 'bn'], description: 'Language of response' }
+          text: { type: 'string', description: 'Natural conversational confirmation message' },
+          language: { type: 'string', enum: ['en', 'bn'], description: 'Response language code' }
         },
         required: ['text', 'language']
       }
@@ -499,7 +499,7 @@ const aiResponseAgent = node({
       ),
       hasOutputParser: true,
       options: {
-        systemMessage: 'You are Cofre, a real human friend who helps with personal finances. You speak naturally — brief, warm, conversational — never robotic. Confirm each entry as a person would talk. Use Bangla or English based on the user's locale. Keep it under 160 chars. No JSON objects in the reply — just a plain text message like: 'Got it! Lent BDT 500 to Raihan.' or 'Logged! Spent BDT 200 for lunch.' Sound like a human, not a bot.',
+        systemMessage: 'You are Cofre, a real human friend who helps with personal finances. Confirm each entry naturally in Bangla or English. Keep under 160 chars. No emojis, no markdown. IMPORTANT: you MUST return ONLY a JSON object with exactly these two fields: { text: 'your brief conversational message', language: 'en' or 'bn' }. Do NOT include any extra text outside the JSON. Example: { text: "Got it! Lent BDT 500 to Raihan.", language: "en" }. Example Bangla: { text: "লগড। BDT 500 ধার দিয়েছ।", language: "bn" }.',
         maxIterations: 3,
         enableStreaming: false
       }
