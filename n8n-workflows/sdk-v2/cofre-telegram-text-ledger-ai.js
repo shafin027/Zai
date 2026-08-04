@@ -276,7 +276,7 @@ const extractIntent = node({
       contentType: 'json',
       specifyBody: 'json',
       jsonBody: expr(
-        "={{ JSON.stringify({ model: 'anthropic/claude-sonnet-4.5', temperature: 0, max_tokens: 600, messages: [{ role: 'system', content: 'You are cofre intent extractor. Resolve counterparty names only against knownFriends. Resolve tour_nickname only against activeTours. Return strict JSON only. Shape: { actions: [{ kind: expense|lend|borrow|settle|unknown, amount_cents?:number, currency?:string, counterparty_name?:string, tour_nickname?:string, assign_to_member_name?:string, memo:string, confidence:number, followup_question?:string }], language: en|bn }' }, { role: 'user', content: 'TRANSCRIPT: ' + $('Gather Intent Context').item.json.transcript + '\\nLOCALE: ' + $('Gather Intent Context').item.json.user.locale + '\\nCURRENCY: ' + $('Gather Intent Context').item.json.user.default_currency + '\\nFRIENDS: ' + JSON.stringify($('Gather Intent Context').item.json.friends) + '\\nTOURS: ' + JSON.stringify($('Gather Intent Context').item.json.tours) }] }) }}"
+        "={{ JSON.stringify({ model: 'anthropic/claude-sonnet-4.5', temperature: 0, max_tokens: 600, messages: [{ role: 'system', content: 'You are cofre intent extractor. Resolve counterparty names only against knownFriends. Resolve tour_nickname only against activeTours. Return strict JSON only. Shape: { actions: [{ kind: expense|lend|borrow|settle|unknown, amount_cents?:number, currency?:string, counterparty_name?:string, tour_nickname?:string, assign_to_member_name?:string, memo:string, confidence:number, followup_question?:string }], language: en|bn }' }, { role: 'user', content: 'TRANSCRIPT: ' + $json.transcript + '\\nLOCALE: ' + $json.user.locale + '\\nCURRENCY: ' + $json.user.default_currency + '\\nFRIENDS: ' + JSON.stringify($json.friends) + '\\nTOURS: ' + JSON.stringify($json.tours) }] }) }}"
       ),
       options: { response: { response: { responseFormat: 'json' } }, timeout: 30000 }
     },
@@ -315,7 +315,7 @@ const ifActionable = ifElse({
         combinator: 'and',
         conditions: [{
           id: 'kind-known',
-          leftValue: expr("={{ $('Parse Intent JSON').item.json.actions[0].kind }}"),
+          leftValue: expr("={{ $json.actions && $json.actions[0] ? $json.actions[0].kind : 'unknown' }}"),
           rightValue: 'unknown',
           operator: { type: 'string', operation: 'notEquals' }
         }]
@@ -334,8 +334,8 @@ const buildRow = node({
       mode: 'runOnceForAllItems',
       language: 'javaScript',
       jsCode:
-        "const parsed = $('Parse Intent JSON').item.json;\n" +
-        "const ctx = $('Gather Intent Context').item.json;\n" +
+        "const parsed = $json;\n" +
+        "const ctx = $json;\n" +
         "const a = (parsed.actions || [])[0] || { kind: 'unknown' };\n" +
         "const row = {\n" +
         "  owner_id: ctx.user.id,\n" +
@@ -446,12 +446,12 @@ const aiResponseAgent = node({
         "+ 'Generate a brief, natural, conversational confirmation message based on the action below. '\n" +
         "+ 'Match the user\\'s language (Bangla or English). Keep it under 160 chars. '\n" +
         "+ 'No emojis. No markdown. One human breath.\\n\\n'\n" +
-        "+ 'USER: ' + $('Gather Intent Context').item.json.user.first_name + ' (locale: ' + $('Gather Intent Context').item.json.user.locale + ')\\n'\n" +
-        "+ 'ACTION: ' + $('Parse Intent JSON').item.json.actions[0].kind + '\\n'\n" +
-        "+ 'AMOUNT: ' + ($('Parse Intent JSON').item.json.actions[0].amount_cents / 100) + ' ' + ($('Parse Intent JSON').item.json.actions[0].currency || $('Gather Intent Context').item.json.user.default_currency) + '\\n'\n" +
-        "+ 'COUNTERPARTY: ' + ($('Parse Intent JSON').item.json.actions[0].counterparty_name || 'none') + '\\n'\n" +
-        "+ 'TOUR: ' + ($('Parse Intent JSON').item.json.actions[0].tour_nickname || 'none') + '\\n'\n" +
-        "+ 'MEMO: ' + ($('Parse Intent JSON').item.json.actions[0].memo || '') + '\\n\\n'\n" +
+        "+ 'USER: ' + $json.user.first_name + ' (locale: ' + $json.user.locale + ')\\n'\n" +
+        "+ 'ACTION: ' + $json.actions[0].kind + '\\n'\n" +
+        "+ 'AMOUNT: ' + ($json.actions[0].amount_cents / 100) + ' ' + ($json.actions[0].currency || $json.user.default_currency) + '\\n'\n" +
+        "+ 'COUNTERPARTY: ' + ($json.actions[0].counterparty_name || 'none') + '\\n'\n" +
+        "+ 'TOUR: ' + ($json.actions[0].tour_nickname || 'none') + '\\n'\n" +
+        "+ 'MEMO: ' + ($json.actions[0].memo || '') + '\\n\\n'\n" +
         "+ 'Return JSON: { text: string, language: en|bn }' }}"
       ),
       hasOutputParser: true,
