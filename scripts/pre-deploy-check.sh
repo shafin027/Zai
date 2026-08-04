@@ -76,8 +76,10 @@ echo "    ok"
 # 4) No leftover references to removed paths
 # ============================================================
 echo "==> checking for references to removed voice / n8n paths"
-if grep -rEn --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=.git --exclude='.env.local' 'lib/voice|stt\.ts|tts\.ts|cofre-error-workflow|cofre-tour-daily-summary|cofre-voice-ledger|cofre-telegram-notify|cofre-starter-chime|/api/notify|N8N_WEBHOOK_INGRESS_URL|N8N_SHARED_SECRET' web/ > /tmp/cofre-stale 2>/dev/null; then
-  echo "    ! references to removed/optional paths still present"
+# Allow these in v0.2+ — n8n is now wired for voice entry/reply.
+ALLOWED_REGEX='lib/voice|stt\.ts|tts\.ts|cofre-starter-chime'
+if grep -rEn --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=.git --exclude='.env.local' "${ALLOWED_REGEX}" web/ > /tmp/cofre-stale 2>/dev/null; then
+  echo "    ! references to removed paths still present"
   cat /tmp/cofre-stale
   rm -f /tmp/cofre-stale
   exit 1

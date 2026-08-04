@@ -1,16 +1,14 @@
 // POST /api/entries — record an entry. Broadcasts via Supabase Realtime
 // (the dashboard auto-refreshes). For lend/borrow rows where the
 // counterparty has a Telegram-linked Cofre account, a text ping goes
-// straight to Telegram from this server (no n8n dependency in v0.1).
-//
-// In v0.2 when n8n workflows come back, this swaps dispatchCounterpartyText
-// for dispatchCounterpartyVoice and routes through n8n.
+// through the n8n `cofre-notify` workflow (voice reply in v0.2, text in
+// fallback mode).
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { currentSession } from '@/lib/auth';
 import { supabaseServer } from '@/lib/supabase/server';
 import { insertEntry } from '@/lib/supabase/queries';
-import { notifyCounterpartyText } from '@/lib/telegram/notify-counterparty';
+import { notifyCounterpartyText } from '@/lib/n8n/notify';
 
 const Schema = z.object({
   kind: z.enum(['expense', 'lend', 'borrow', 'settle']),
