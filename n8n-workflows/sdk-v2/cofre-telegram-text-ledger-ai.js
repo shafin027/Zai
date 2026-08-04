@@ -62,7 +62,7 @@ const typingStart = node({
     parameters: {
       resource: 'message',
       operation: 'sendChatAction',
-      chatId: expr("={{ $json.message.chat.id }}"),
+      chatId: expr("={{ $('Telegram Trigger').item.json.message.chat.id }}"),
       action: 'typing',
       additionalFields: { appendAttribution: false }
     },
@@ -143,7 +143,7 @@ const typingEntry = node({
     parameters: {
       resource: 'message',
       operation: 'sendChatAction',
-      chatId: expr("={{ $json.message.chat.id }}"),
+      chatId: expr("={{ $('Telegram Trigger').item.json.message.chat.id }}"),
       action: 'typing',
       additionalFields: { appendAttribution: false }
     },
@@ -276,7 +276,7 @@ const extractIntent = node({
       contentType: 'json',
       specifyBody: 'json',
       jsonBody: expr(
-        "={{ JSON.stringify({ model: 'anthropic/claude-sonnet-4.5', temperature: 0, max_tokens: 600, messages: [{ role: 'system', content: 'You are cofre intent extractor. Resolve counterparty names only against knownFriends. Resolve tour_nickname only against activeTours. Return strict JSON only. Shape: { actions: [{ kind: expense|lend|borrow|settle|unknown, amount_cents?:number, currency?:string, counterparty_name?:string, tour_nickname?:string, assign_to_member_name?:string, memo:string, confidence:number, followup_question?:string }], language: en|bn }' }, { role: 'user', content: 'TRANSCRIPT: ' + $json.transcript + '\\nLOCALE: ' + $json.user.locale + '\\nCURRENCY: ' + $json.user.default_currency + '\\nFRIENDS: ' + JSON.stringify($json.friends) + '\\nTOURS: ' + JSON.stringify($json.tours) }] }) }}"
+        "={{ JSON.stringify({ model: 'anthropic/claude-sonnet-4.5', temperature: 0, max_tokens: 600, messages: [{ role: 'system', content: 'You are cofre intent extractor. Resolve counterparty names only against knownFriends. Resolve tour_nickname only against activeTours. Return strict JSON only. Shape: { actions: [{ kind: expense|lend|borrow|settle|unknown, amount_cents?:number, currency?:string, counterparty_name?:string, tour_nickname?:string, assign_to_member_name?:string, memo:string, confidence:number, followup_question?:string }], language: en|bn }' }, { role: 'user', content: 'TRANSCRIPT: ' + $json.transcript + '\\nLOCALE: ' + $('Gather Intent Context').item.json.user.locale + '\\nCURRENCY: ' + $('Gather Intent Context').item.json.user.default_currency + '\\nFRIENDS: ' + JSON.stringify($json.friends) + '\\nTOURS: ' + JSON.stringify($json.tours) }] }) }}"
       ),
       options: { response: { response: { responseFormat: 'json' } }, timeout: 30000 }
     },
@@ -315,7 +315,7 @@ const ifActionable = ifElse({
         combinator: 'and',
         conditions: [{
           id: 'kind-known',
-          leftValue: expr("={{ $json.actions && $json.actions[0] ? $json.actions[0].kind : 'unknown' }}"),
+          leftValue: expr("={{ $json.actions && $json.actions[0] ? $('Parse Intent JSON').item.json.actions[0].kind : 'unknown' }}"),
           rightValue: 'unknown',
           operator: { type: 'string', operation: 'notEquals' }
         }]
@@ -452,7 +452,7 @@ const simpleMemory = memory({
     name: 'Conversation Memory',
     parameters: {
       sessionIdType: 'customKey',
-      sessionKey: expr("={{ $json.message.chat.id }}"),
+      sessionKey: expr("={{ $('Telegram Trigger').item.json.message.chat.id }}"),
       contextWindowLength: 5
     }
   }
@@ -489,17 +489,17 @@ const aiResponseAgent = node({
         "+ 'Generate a brief, natural, conversational confirmation message based on the action below. '\n" +
         "+ 'Match the user\\'s language (Bangla or English). Keep it under 160 chars. '\n" +
         "+ 'No emojis. No markdown. One human breath.\\n\\n'\n" +
-        "+ 'USER: ' + $json.user.first_name + ' (locale: ' + $json.user.locale + ')\\n'\n" +
-        "+ 'ACTION: ' + $json.actions[0].kind + '\\n'\n" +
-        "+ 'AMOUNT: ' + ($json.actions[0].amount_cents / 100) + ' ' + ($json.actions[0].currency || $json.user.default_currency) + '\\n'\n" +
-        "+ 'COUNTERPARTY: ' + ($json.actions[0].counterparty_name || 'none') + '\\n'\n" +
-        "+ 'TOUR: ' + ($json.actions[0].tour_nickname || 'none') + '\\n'\n" +
-        "+ 'MEMO: ' + ($json.actions[0].memo || '') + '\\n\\n'\n" +
+        "+ 'USER: ' + $('Gather Intent Context').item.json.user.first_name + ' (locale: ' + $('Gather Intent Context').item.json.user.locale + ')\\n'\n" +
+        "+ 'ACTION: ' + $('Parse Intent JSON').item.json.actions[0].kind + '\\n'\n" +
+        "+ 'AMOUNT: ' + ($('Parse Intent JSON').item.json.actions[0].amount_cents / 100) + ' ' + ($('Parse Intent JSON').item.json.actions[0].currency || $('Gather Intent Context').item.json.user.default_currency) + '\\n'\n" +
+        "+ 'COUNTERPARTY: ' + ($('Parse Intent JSON').item.json.actions[0].counterparty_name || 'none') + '\\n'\n" +
+        "+ 'TOUR: ' + ($('Parse Intent JSON').item.json.actions[0].tour_nickname || 'none') + '\\n'\n" +
+        "+ 'MEMO: ' + ($('Parse Intent JSON').item.json.actions[0].memo || '') + '\\n\\n'\n" +
         "+ 'Return JSON: { text: string, language: en|bn }' }}"
       ),
       hasOutputParser: true,
       options: {
-        systemMessage: 'You are Cofre, a friendly personal finance assistant. Generate natural, concise confirmation messages in the user\'s language (Bangla or English). Keep responses under 160 characters, conversational, one human breath. No emojis, no markdown.',
+        systemMessage: 'You are Cofre, a friendly personal finance assistant. Generate natural, concise confirmation messages in the user's language (Bangla or English). Keep responses under 160 characters, conversational, one human breath. No emojis, no markdown.',
         maxIterations: 3,
         enableStreaming: false
       }
@@ -521,7 +521,7 @@ const sendReply = node({
     parameters: {
       resource: 'message',
       operation: 'sendMessage',
-      chatId: expr("={{ $json.message.chat.id }}"),
+      chatId: expr("={{ $('Telegram Trigger').item.json.message.chat.id }}"),
       text: expr("={{ $('AI Response Agent').item.json.output.text }}"),
       additionalFields: { disable_web_page_preview: true, appendAttribution: false }
     },
